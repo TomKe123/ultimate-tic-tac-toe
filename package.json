@@ -1,0 +1,25 @@
+{
+  "name": "ultimate-tictactoe",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "private": true,
+  "scripts": {
+    "start": "node scripts/start.cjs",
+    "dev": "vite --config ./vite.config.mjs",
+    "build": "vite build",
+    "preview": "vite preview",
+    "server": "node server/index.cjs"
+  },
+  "dependencies": {
+    "vue": "^3.3.0",
+    "qrcode": "^1.5.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.3",
+    "vite": "^5.0.0",
+    "ws": "^8.13.0"
+  }
+}

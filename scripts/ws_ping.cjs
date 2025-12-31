@@ -1,0 +1,7 @@
+const WebSocket = require('ws')
+const ws = new WebSocket(process.env.WS_URL || 'ws://localhost:3000')
+ws.on('open', () => console.log('open'))
+ws.on('message', (m) => console.log('msg', m.toString()))
+ws.on('error', (e) => console.log('error', e && e.stack ? e.stack : e))
+ws.on('close', () => console.log('close'))
+setTimeout(() => { console.log('bye'); ws.close(); process.exit(0) }, 5000)

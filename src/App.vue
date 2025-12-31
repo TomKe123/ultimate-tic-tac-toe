@@ -1,0 +1,391 @@
+<template>
+  <div class="app">
+    <header>
+      <h1>复合井字棋（在线）</h1>
+    </header>
+
+    <main>
+      <section class="controls">
+        <login-panel v-if="!loggedIn" :error="loginError" @login="handleLogin" />
+
+        <div v-else>
+          <input v-model="nick" placeholder="昵称（可选）" />
+          <button @click="logout" style="margin-left:8px">注销</button>
+          <input v-model="roomId" placeholder="房间号（空为新建）" />
+          <select v-model="role">
+            <option value="player">玩家</option>
+            <option value="spectator">观战</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" v-model="playWithAi" :disabled="role !== 'player'" /> 对战机器人
+          </label>
+          <button class="primary" @click="join">加入/创建房间</button>
+          <button @click="resetGame" :disabled="!roomId">重置游戏</button>
+          <button @click="reconnect">重新连接</button>
+          <button @click="leaveRoom" :disabled="!roomId">退出房间</button>
+          <button @click="clearLogs">清空日志</button>
+          <share-panel v-if="roomId" :room-id="roomId" />
+          <div class="muted" style="margin-left:8px">WS: <strong v-if="connected">已连接</strong><strong v-else>未连接</strong> （{{ url }}）</div>
+          <div class="muted" style="margin-left:8px">客户端 ID: <strong>{{ clientId ?? '-' }}</strong></div>
+        </div>
+      </section>
+
+      <aside v-if="!isPlaying" style="margin:12px 0">
+        <lobby-panel :rooms="lobbyRooms" @refresh="requestLobby" @join="joinFromLobby" @spectate="spectateFromLobby" />
+      </aside>
+      <div class="error" v-if="lastError">错误：{{ lastError }}</div>
+
+      <section v-if="state" class="game-area">
+        <div class="meta-card">
+          <div class="meta-row meta-header">
+            <div class="room-id">房间：<strong>{{ state.roomId }}</strong></div>
+            <button class="copy-btn" @click="copyRoomId">复制房间号</button>
+          </div>
+
+          <div class="meta-row">
+            <div class="role">你的身份：<span class="player-label">{{ clientRoleLabel }}</span></div>
+            <div class="spectators">观战：<span class="muted">{{ state.spectatorCount ?? 0 }}</span></div>
+          </div>
+
+          <div class="meta-row players">
+            <div class="player-badge" :class="state.currentPlayer === 'X' ? 'active' : ''">
+              <div class="sym">X</div>
+              <div class="name">{{ state.players.X ?? '等待' }}</div>
+            </div>
+            <div class="vs">/</div>
+            <div class="player-badge" :class="state.currentPlayer === 'O' ? 'active' : ''">
+              <div class="sym">O</div>
+              <div class="name">{{ state.players.O ?? '等待' }}</div>
+            </div>
+          </div>
+
+          <div class="meta-row status-row">
+            <div class="turn">回合：<span class="badge" :class="state.currentPlayer === 'X' ? 'turn-x' : 'turn-o'">{{ state.currentPlayer }}</span></div>
+            <div class="next-board">可落子小格：<strong>{{ state.nextAllowedBoard === -1 ? '任意' : state.nextAllowedBoard }}</strong></div>
+          </div>
+
+          <div class="meta-row helper">
+            <div class="helper-text" :class="{ canMove: isMyTurn }">
+              {{ helperText }}
+            </div>
+            <div style="margin-left:auto">
+              <button v-if="meSymbol" @click="switchToSpectator">切换为观战</button>
+              <button v-else @click="switchToPlayer" :disabled="!state.hasVacancy" :title="!state.hasVacancy ? '当前无空位或无法替换 AI' : '请求成为玩家'">请求加入为玩家</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="state.winner" class="winner-overlay">
+          <div class="winner-card">
+            <div class="winner-text">胜者</div>
+            <div class="winner-symbol" :class="state.winner === 'X' ? 'turn-x' : 'turn-o'">{{ state.winner }}</div>
+            <button @click="resetGame" class="primary">重新开始</button>
+          </div>
+        </div>
+
+        <ultimate-board
+          :state="state"
+          :meSymbol="meSymbol"
+          :clientId="clientId"
+          @move="sendMove"
+        />
+
+        <div class="log" aria-live="polite">
+          <div class="log-header"><h4>消息</h4><small class="muted">（仅保留最近 200 条）</small></div>
+          <div class="log-list" ref="logList">
+            <div v-for="(m, idx) in logs.slice(0,200)" :key="idx" class="log-item">{{ m }}</div>
+          </div>
+        </div>
+      </section>
+
+      <section v-else class="hint">
+        <p>请加入或创建房间来开始游戏（支持观战）。</p>
+      </section>
+    </main>
+
+    <footer>
+      <small>说明：规则为“嵌套井字棋”/Ultimate Tic-Tac-Toe。服务器为简单示例，仅用于学习与本地运行。</small>
+    </footer>
+  </div>
+</template>
+
+<script>
+import UltimateBoard from './components/UltimateBoard.vue'
+import SharePanel from './components/SharePanel.vue'
+import LobbyPanel from './components/LobbyPanel.vue'
+import LoginPanel from './components/LoginPanel.vue'
+
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000'
+
+export default {
+  name: 'App',
+  components: { UltimateBoard, SharePanel, LobbyPanel, LoginPanel },
+  mounted() {
+    // 如果 URL 中包含 room 参数，自动填入房间号（便于通过分享链接进入）
+    try {
+      const sp = new URLSearchParams(location.search)
+      const r = sp.get('room')
+      if (r) this.roomId = r
+    } catch (e) {}
+
+    // request initial lobby list when mounted (if connected later, we also request on open)
+    this.lobbyRooms = []
+
+    // auto-scroll log on updates
+    this.$watch('logs', () => {
+      this.$nextTick(() => {
+        const el = this.$refs.logList
+        if (el) el.scrollTop = 0 // newest at top
+      })
+    })
+
+    // initialize login state
+    this.loggedIn = false
+    this.loginError = null
+
+    // auto-login from cookie if present
+    const saved = this.getCookie('uttt_nick')
+    if (saved && saved.length) {
+      // attempt to set nick on server
+      this.handleLogin(saved)
+    }
+  },
+  data() {
+    return {
+      url: WS_URL,
+      ws: null,
+      connected: false,
+      roomId: '',
+      role: 'player',
+      playWithAi: false,
+      playInLobby: false,
+      nick: '',
+      loggedIn: false,
+      loginError: null,
+      state: null,
+      logs: [],
+      lobbyRooms: [],
+      clientId: null,
+      meSymbol: null,
+      lastError: null
+    }
+  },
+  computed: {
+    clientRoleLabel() {
+      if (!this.state) return this.role
+      if (this.state.players[this.meSymbol]) return this.meSymbol
+      return this.role
+    },
+    isPlaying() {
+      return !!this.meSymbol
+    },
+    isMyTurn() {
+      if (!this.meSymbol || !this.state) return false
+      return this.state.currentPlayer === this.meSymbol
+    },
+    helperText() {
+      if (!this.state) return ''
+      if (!this.meSymbol) return '当前为观战者，可观看或申请成为玩家。'
+      if (this.state.winner) return `游戏已结束，胜者：${this.state.winner}`
+      if (this.isMyTurn) return '轮到你落子。请选择可落子小格中的空位。'
+      return '等待对手操作...'
+    }
+  },
+  methods: {
+    connect() {
+      if (this.ws) return
+      this.ws = new WebSocket(this.url)
+      this.ws.addEventListener('open', () => { this.connected = true; this.log('已连接'); /* requestLobby happens after login */ })
+      this.ws.addEventListener('message', (ev) => this.onMessage(ev))
+      this.ws.addEventListener('close', () => { this.connected = false; this.log('已断开'); this.ws = null })
+      this.ws.addEventListener('error', (e) => this.log('WS 错误'))
+    },
+
+    // cookie helpers
+    setCookie(name, value, days = 30) {
+      const d = new Date()
+      d.setTime(d.getTime() + (days*24*60*60*1000))
+      const expires = "expires=" + d.toUTCString()
+      document.cookie = `${name}=${encodeURIComponent(value)};${expires};path=/`;
+    },
+    getCookie(name) {
+      const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
+      return v ? decodeURIComponent(v.pop()) : ''
+    },
+    deleteCookie(name) {
+      document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`;
+    },
+    resetGame() {
+      if (!this.roomId) return
+      this.send({ type: 'reset', roomId: this.roomId })
+    },
+    send(payload) {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) { this.log('WS 未就绪'); return }
+      this.ws.send(JSON.stringify(payload))
+    },
+    requestLobby() {
+      if (!this.loggedIn) return
+      this.send({ type: 'request_lobby' })
+    },
+    handleLogin(nick) {
+      this.loginError = null
+      this.connect()
+      const sendNick = () => this.send({ type: 'set_nick', nick })
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) sendNick()
+      else {
+        const once = () => { sendNick(); this.ws.removeEventListener('open', once); }
+        this.ws.addEventListener('open', once)
+      }
+    },
+    join() {
+      if (!this.loggedIn) { this.loginError = '请先登录昵称'; return }
+      this.connect()
+      const payload = { type: 'join', roomId: this.roomId || null, role: this.role, playWithAi: this.playWithAi }
+      this.send(payload)
+    },
+    joinFromLobby(roomId) {
+      if (!this.loggedIn) { this.loginError = '请先登录昵称'; return }
+      // try to join as player (will become spectator if no vacancy)
+      this.connect()
+      this.roomId = roomId
+      this.send({ type: 'join', roomId, role: 'player' })
+    },
+    spectateFromLobby(roomId) {
+      if (!this.loggedIn) { this.loginError = '请先登录昵称'; return }
+      this.connect()
+      this.roomId = roomId
+      this.send({ type: 'join', roomId, role: 'spectator' })
+    },
+    switchToSpectator() {
+      if (!this.roomId) return
+      this.send({ type: 'switch_role', roomId: this.roomId, role: 'spectator' })
+    },
+    switchToPlayer() {
+      if (!this.roomId) return
+      this.send({ type: 'switch_role', roomId: this.roomId, role: 'player' })
+    },
+    onMessage(ev) {
+      try {
+        const msg = JSON.parse(ev.data)
+        if (msg.type === 'nick_ok') {
+          this.loggedIn = true
+          this.nick = msg.nick
+          this.loginError = null
+          this.log('昵称已注册：' + msg.nick)
+          // persist nick in cookie
+          try { this.setCookie('uttt_nick', msg.nick, 30) } catch (e) {}
+          // after login, request lobby snapshot
+          this.requestLobby()
+          return
+        }
+        if (msg.type === 'nick_taken') {
+          // if auto-login from cookie failed, clear cookie
+          if (this.getCookie('uttt_nick') === (msg.attempted || '')) this.deleteCookie('uttt_nick')
+          this.loginError = msg.message || '昵称已被占用'
+          return
+        }
+        if (msg.type === 'joined') {
+          this.clientId = msg.clientId
+          this.roomId = msg.roomId
+          this.meSymbol = msg.symbol || null
+          this.state = msg.state
+          this.log(`已加入 ${msg.roomId}，身份：${msg.symbol ?? msg.role}`)
+        } else if (msg.type === 'state') {
+          this.state = msg.state
+          // clear transient errors
+          this.lastError = null
+        } else if (msg.type === 'lobby') {
+          this.lobbyRooms = msg.rooms || []
+        } else if (msg.type === 'switched') {
+          this.role = msg.role
+          // ensure local meSymbol is cleared if becoming spectator
+          this.meSymbol = msg.symbol || null
+          this.log('已切换为：' + msg.role)
+        } else if (msg.type === 'left') {
+          // server acknowledged we left the room
+          this.log('已退出房间')
+          this.roomId = ''
+          this.state = null
+          this.meSymbol = null
+        } else if (msg.type === 'error') {
+          this.lastError = msg.message
+          this.log('错误：' + msg.message)
+          setTimeout(() => this.lastError = null, 5000)
+        }
+      } catch (e) { this.log('消息解析出错') }
+    },
+    sendMove({ boardIndex, cellIndex }) {
+      this.send({ type: 'move', roomId: this.roomId, boardIndex, cellIndex })
+    },
+    reconnect() {
+      if (this.ws) this.ws.close()
+      this.ws = null
+      this.connect()
+    },
+    clearLogs() { this.logs = [] },
+    leaveRoom() {
+      if (!this.roomId) return
+      try { this.send({ type: 'leave', roomId: this.roomId }) } catch (e) {}
+      // optimistic local clear; server will also confirm with a 'left' message
+      this.roomId = ''
+      this.state = null
+      this.meSymbol = null
+      this.log('正在退出房间...')
+    },
+    copyRoomId() {
+      if (!this.roomId) return
+      const text = this.roomId
+      if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => this.log('已复制房间号')).catch(() => { try { prompt('复制房间号：', text) } catch (e) {} })
+      } else {
+        try { prompt('复制房间号：', text) } catch (e) { }
+      }
+    },
+    logout() {
+      // ensure we leave any room first
+      try { if (this.roomId) this.send({ type: 'leave', roomId: this.roomId }) } catch (e) {}
+      try { this.send({ type: 'logout' }) } catch (e) {}
+      try { this.deleteCookie('uttt_nick') } catch (e) {}
+      this.loggedIn = false
+      this.nick = ''
+      this.loginError = null
+      this.log('已注销')
+    },
+    log(text) { this.logs.unshift(new Date().toLocaleTimeString() + ' ' + text) }
+  }
+}
+</script>
+
+<style scoped>
+.app { max-width: 1000px; margin: 0 auto; padding: 16px; font-family: Arial, sans-serif }
+header h1 { margin: 0 0 8px }
+.controls { display:flex; gap:8px; align-items:center; margin-bottom:12px }
+.game-area { display:flex; gap:16px }
+.meta { min-width: 220px }
+.log { background:#fff;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(12,22,48,0.06);min-width:300px;max-width:360px}
+.log-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.log-list{max-height:420px;overflow:auto;padding-top:8px}
+.log-item{padding:6px 8px;border-bottom:1px dashed #eef5fb;font-size:.95rem;color:#0b1220}
+@media (max-width:900px){.log{max-width:100%;min-width:auto;margin-top:12px}}
+.hint { color:#666 }
+footer { margin-top:18px; color:#888 }
+
+/* UI improvements */
+.badge{font-size:0.95rem}
+.winner-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(10,15,25,0.35);z-index:50}
+.winner-card{background:#fff;padding:22px;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:12px;box-shadow:0 12px 40px rgba(9,22,48,0.18)}
+.winner-text{font-size:.9rem;color:#6b7280}
+.winner-symbol{font-size:64px;font-weight:800}
+
+.meta-card{background:#fff;padding:14px;border-radius:10px;box-shadow:0 8px 20px rgba(12,22,48,0.06);min-width:220px;display:flex;flex-direction:column;gap:8px}
+.meta-row{display:flex;align-items:center;gap:12px}
+.meta-header{justify-content:space-between;align-items:center}
+.copy-btn{background:#eef6ff;border:1px solid #d0e8ff;padding:6px 8px;border-radius:6px;cursor:pointer}
+.player-badge{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;background:#f8fafc}
+.player-badge .sym{font-weight:800;width:22px;text-align:center}
+.player-badge.active{background:#fff8eb;border:1px solid #ffdca3}
+.helper-text{font-size:.95rem;color:#4b5563}
+.helper-text.canMove{color:#064e3b;font-weight:600}
+.status-row{gap:18px}
+.vs{opacity:.5}
+</style>
