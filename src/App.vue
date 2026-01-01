@@ -5,116 +5,73 @@
     </header>
 
     <main>
-      <!-- 登录面板或控制栏 -->
       <section class="controls">
         <login-panel v-if="!loggedIn" :error="loginError" @login="handleLogin" />
 
-        <div v-else class="control-panel">
-          <!-- 第一行：登录和房间信息 -->
-          <div class="control-row">
-            <div class="input-group">
-              <input v-model="nick" placeholder="昵称（可选）" />
-              <button @click="logout" class="danger">注销</button>
-            </div>
-            
-            <div class="input-group">
-              <input v-model="roomId" placeholder="房间号（空为新建）" />
-              <select v-model="role">
-                <option value="player">玩家</option>
-                <option value="spectator">观战</option>
-              </select>
-            </div>
-
-            <button 
-              v-if="role === 'player'"
-              @click="playWithAi = !playWithAi"
-              :class="['ai-toggle', { active: playWithAi }]"
-              :title="playWithAi ? '关闭机器人' : '启用机器人对战'">
-              <span class="ai-icon">🤖</span>
-              <span class="ai-label">{{ playWithAi ? '机器人ON' : '机器人' }}</span>
-            </button>
-
-            <div class="status-group">
-              <div class="status">WS: <strong v-if="connected" class="connected">已连接</strong><strong v-else class="disconnected">未连接</strong></div>
-              <div class="client-id">ID: <strong>{{ clientId?.slice(0, 8) ?? '-' }}</strong></div>
-            </div>
-          </div>
-
-          <!-- 第二行：操作按钮 -->
-          <div class="control-row buttons-row">
-            <button class="primary" @click="join">加入/创建</button>
-            <button @click="resetGame" :disabled="!roomId">重置游戏</button>
-            <button @click="reconnect">重新连接</button>
-            <button @click="leaveRoom" :disabled="!roomId">退出房间</button>
-            <button @click="clearLogs">清空日志</button>
-            <share-panel v-if="roomId" :room-id="roomId" />
-          </div>
+        <div v-else>
+          <input v-model="nick" placeholder="昵称（可选）" />
+          <button @click="logout" style="margin-left:8px">注销</button>
+          <input v-model="roomId" placeholder="房间号（空为新建）" />
+          <select v-model="role">
+            <option value="player">玩家</option>
+            <option value="spectator">观战</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" v-model="playWithAi" :disabled="role !== 'player'" /> 对战机器人
+          </label>
+          <button class="primary" @click="join">加入/创建房间</button>
+          <button @click="resetGame" :disabled="!roomId">重置游戏</button>
+          <button @click="reconnect">重新连接</button>
+          <button @click="leaveRoom" :disabled="!roomId">退出房间</button>
+          <button @click="clearLogs">清空日志</button>
+          <share-panel v-if="roomId" :room-id="roomId" />
+          <div class="muted" style="margin-left:8px">WS: <strong v-if="connected">已连接</strong><strong v-else>未连接</strong> （{{ url }}）</div>
+          <div class="muted" style="margin-left:8px">客户端 ID: <strong>{{ clientId ?? '-' }}</strong></div>
         </div>
       </section>
 
-      <!-- 大厅面板（仅在非游戏状态显示） -->
-      <aside v-if="!isPlaying && !state" class="lobby-section">
+      <aside v-if="!isPlaying" style="margin:12px 0">
         <lobby-panel :rooms="lobbyRooms" @refresh="requestLobby" @join="joinFromLobby" @spectate="spectateFromLobby" />
       </aside>
       <div class="error" v-if="lastError">错误：{{ lastError }}</div>
 
       <section v-if="state" class="game-area">
         <div class="top-row">
-          <!-- 观战模式下显示大厅 -->
-          <aside v-if="!isPlaying" class="lobby-in-game">
-            <lobby-panel :rooms="lobbyRooms" @refresh="requestLobby" @join="joinFromLobby" @spectate="spectateFromLobby" />
-          </aside>
-          
           <div class="meta-card">
             <div class="meta-row meta-header">
-              <div class="room-badge">
-                <span class="label">房间</span>
-                <span class="value">{{ state.roomId }}</span>
-              </div>
-              <button class="copy-btn" @click="copyRoomId">复制</button>
+              <div class="room-id">房间：<strong>{{ state.roomId }}</strong></div>
+              <button class="copy-btn" @click="copyRoomId">复制房间号</button>
             </div>
 
             <div class="meta-row">
-              <div class="identity-section">
-                <span class="label">身份</span>
-                <span class="player-label">{{ clientRoleLabel }}</span>
+              <div class="role">你的身份：<span class="player-label">{{ clientRoleLabel }}</span></div>
+              <div class="spectators">观战：<span class="muted">{{ state.spectatorCount ?? 0 }}</span></div>
+            </div>
+
+            <div class="meta-row players">
+              <div class="player-badge" :class="state.currentPlayer === 'X' ? 'active' : ''">
+                <div class="sym">X</div>
+                <div class="name">{{ state.players.X ?? '等待' }}</div>
               </div>
-              <div class="spectator-count">
-                <span class="label">观战</span>
-                <span class="value">{{ state.spectatorCount ?? 0 }}</span>
+              <div class="vs">/</div>
+              <div class="player-badge" :class="state.currentPlayer === 'O' ? 'active' : ''">
+                <div class="sym">O</div>
+                <div class="name">{{ state.players.O ?? '等待' }}</div>
               </div>
             </div>
 
-            <div class="meta-row players-section">
-              <div class="player-card" :class="{ active: state.currentPlayer === 'X' }">
-                <div class="player-symbol">X</div>
-                <div class="player-name">{{ state.players.X ?? '等待玩家' }}</div>
-              </div>
-              <div class="vs-divider">vs</div>
-              <div class="player-card" :class="{ active: state.currentPlayer === 'O' }">
-                <div class="player-symbol">O</div>
-                <div class="player-name">{{ state.players.O ?? '等待玩家' }}</div>
-              </div>
+            <div class="meta-row status-row">
+              <div class="turn">回合：<span class="badge" :class="state.currentPlayer === 'X' ? 'turn-x' : 'turn-o'">{{ state.currentPlayer }}</span></div>
+              <div class="next-board">可落子小格：<strong>{{ state.nextAllowedBoard === -1 ? '任意' : state.nextAllowedBoard }}</strong></div>
             </div>
 
-            <div class="meta-row status-section">
-              <div class="status-item">
-                <span class="label">当前回合</span>
-                <span class="turn-badge" :class="state.currentPlayer === 'X' ? 'turn-x' : 'turn-o'">{{ state.currentPlayer }}</span>
-              </div>
-              <div class="status-item">
-                <span class="label">可落子</span>
-                <span class="board-badge">{{ state.nextAllowedBoard === -1 ? '任意' : `#${state.nextAllowedBoard}` }}</span>
-              </div>
-            </div>
-
-            <div class="helper-section">
+            <div class="meta-row helper">
               <div class="helper-text" :class="{ canMove: isMyTurn }">
                 {{ helperText }}
               </div>
-              <div class="action-buttons">
-                <button v-if="meSymbol" @click="switchToSpectator" class="small">切换观战</button>
-                <button v-else @click="switchToPlayer" :disabled="!state.hasVacancy" :title="!state.hasVacancy ? '当前无空位或无法替换 AI' : '请求成为玩家'" class="small">加入游戏</button>
+              <div style="margin-left:auto">
+                <button v-if="meSymbol" @click="switchToSpectator">切换为观战</button>
+                <button v-else @click="switchToPlayer" :disabled="!state.hasVacancy" :title="!state.hasVacancy ? '当前无空位或无法替换 AI' : '请求成为玩家'">请求加入为玩家</button>
               </div>
             </div>
 
@@ -146,14 +103,12 @@
           </div>
         </div>
 
-        <div class="board-wrapper">
-          <ultimate-board
-            :state="state"
-            :meSymbol="meSymbol"
-            :clientId="clientId"
-            @move="sendMove"
-          />
-        </div>
+        <ultimate-board
+          :state="state"
+          :meSymbol="meSymbol"
+          :clientId="clientId"
+          @move="sendMove"
+        />
       </section>
 
       <section v-else class="hint">
@@ -452,1267 +407,75 @@ export default {
 </script>
 
 <style scoped>
-.app { 
-  font-family: inherit;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  overflow-x: hidden;
-  overflow-y: auto;
-}
-
-header {
-  flex-shrink: 0;
-}
-
-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding-bottom: 20px;
-}
-
-footer {
-  flex-shrink: 0;
-}
-
-.controls {
-  flex-shrink: 0;
-}
-
-.control-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  background: #fff;
-  padding: 12px;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-  border: 1px solid #e2e8f0;
-}
-
-.control-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.control-row.buttons-row {
-  gap: 8px;
-}
-
-.control-row.buttons-row button,
-.control-row.buttons-row > div {
-  flex: 1 1 auto;
-  min-width: 80px;
-}
-
-.input-group {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex: 1 1 auto;
-}
-
-.input-group input,
-.input-group select {
-  padding: 8px 10px;
-  border-radius: var(--radius-md);
-  border: 1px solid #cbd5e1;
-  background: #fff;
-  color: #1e293b;
-  font-size: 0.9rem;
-  transition: border-color 0.2s;
-}
-
-.input-group input:focus,
-.input-group select:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-}
-
-.input-group input {
-  flex: 1 1 auto;
-  min-width: 120px;
-}
-
-.input-group select {
-  flex: 0 1 auto;
-  min-width: 90px;
-}
-
-/* AI 对战按钮 */
-.ai-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  border: 2px solid #cbd5e1;
-  background: #fff;
-  color: #1e293b;
-  font-weight: 600;
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  white-space: nowrap;
-  flex: 0 1 auto;
-}
-
-.ai-toggle:hover {
-  border-color: #7c3aed;
-  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
-  background: #faf5ff;
-}
-
-.ai-toggle.active {
-  background: linear-gradient(135deg, #a78bfa 0%, #7c3aed 100%);
-  color: #fff;
-  border-color: #7c3aed;
-  box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
-}
-
-.ai-toggle.active:hover {
-  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.4);
-  transform: translateY(-1px);
-}
-
-.ai-toggle:active:not(:disabled) {
-  transform: translateY(0);
-}
-
-.ai-toggle:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.ai-icon {
-  font-size: 1rem;
-  display: inline-block;
-}
-
-.ai-label {
-  font-size: 0.9rem;
-}
-
-.checkbox-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.9rem;
-  color: #334155;
-  white-space: nowrap;
-  flex: 0 1 auto;
-}
-
-.checkbox-group input[type="checkbox"] {
-  cursor: pointer;
-  width: 16px;
-  height: 16px;
-}
-
-.status-group {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  flex: 0 1 auto;
-}
-
-.status,
-.client-id {
-  font-size: 0.85rem;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.status strong,
-.client-id strong {
-  color: #1e293b;
-  font-weight: 700;
-}
-
-.connected {
-  color: var(--success) !important;
-}
-
-.disconnected {
-  color: #dc2626 !important;
-}
-
-button.danger {
-  background: #fee2e2;
-  color: #dc2626;
-  border: 1px solid #fca5a5;
-}
-
-button.danger:hover {
-  border-color: #dc2626;
-  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.2);
-}
-
-.lobby-section {
-  flex-shrink: 0;
-  max-height: 240px;
-  overflow: hidden;
-  margin: 0;
-  border-radius: var(--radius-lg);
-}
-
-.lobby-section .lobby-panel {
-  max-height: 240px;
-  overflow-y: auto;
-}
-
-.log {
-  background: linear-gradient(135deg, #f8fafc 0%, #f0f4f8 100%);
-  padding: 12px;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  display: flex;
-  flex-direction: column;
-  border: 1px solid #e2e8f0;
-}
-
-.log-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 2px solid #cbd5e1;
-}
-
-.log-header h4 {
-  margin: 0;
-  color: #1e293b;
-  font-size: 0.95rem;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.log-header small {
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.log-list {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column-reverse;
-  min-height: 0;
-  gap: 4px;
-  padding: 4px 0;
-}
-
-.log-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.log-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.log-list::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 3px;
-}
-
-.log-list::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
-}
-
-.log-item {
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  font-size: 0.85rem;
-  color: #475569;
-  font-family: 'Courier New', monospace;
-  transition: all 0.2s;
-  border-left: 2px solid transparent;
-  background: #fff;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.log-item:hover {
-  background: #f1f5f9;
-  border-left-color: var(--accent);
-}
-
-/* 日志条目根据内容着色 */
-.log-item:nth-child(1) {
-  border-left-color: #10b981;
-  background: rgba(16, 185, 129, 0.05);
-}
-
-.log-item:nth-child(2) {
-  border-left-color: #3b82f6;
-  background: rgba(59, 130, 246, 0.05);
-}
-
-aside {
-  flex-shrink: 0;
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.game-area { 
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-}
-
-.top-row {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  min-height: 0;
-  overflow: visible;
-  flex-wrap: wrap;
-  width: 100%;
-  max-width: 1200px;
-  flex-shrink: 0;
-}
-
-/* 观战模式下的大厅面板 */
-.lobby-in-game {
-  flex: 1;
-  min-width: 280px;
-  max-height: 500px;
-  overflow-y: auto;
-  background: #fff;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  border: 1px solid #e2e8f0;
-}
-
-.top-row .meta-card {
-  width: 100%;
-  max-width: 380px;
-  flex-shrink: 0;
-  background: #fff;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  border: 1px solid #e2e8f0;
-  padding: 16px;
-}
-
-.top-row .log {
-  flex: 1;
-  min-width: 300px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  max-height: 500px;
-}
-
-/* 美化对局信息卡片 */
-.meta-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 0.95rem;
-  padding: 12px 0;
-  border-bottom: 1px solid #e2e8f0;
-  flex-wrap: wrap;
-}
-
-.meta-row:last-child {
-  border-bottom: none;
-}
-
-.meta-row.meta-header {
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 2px solid #e2e8f0;
-  padding-bottom: 14px;
-  margin-bottom: 4px;
-}
-
-/* 房间信息徽章 */
-.room-badge {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: linear-gradient(135deg, #f0f7ff 0%, #eef2ff 100%);
-  border: 1px solid rgba(37, 99, 235, 0.2);
-  border-radius: var(--radius-md);
-  flex: 1;
-}
-
-.room-badge .label {
-  color: var(--muted);
-  font-size: 0.85rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.room-badge .value {
-  color: var(--accent);
-  font-weight: 700;
-  font-family: 'Courier New', monospace;
-  font-size: 0.95rem;
-}
-
-.copy-btn {
-  padding: 7px 12px;
-  font-size: 0.85rem;
-  background: white;
-  border: 1px solid #cbd5e1;
-  color: var(--accent);
-  font-weight: 600;
-  min-width: auto;
-}
-
-.copy-btn:hover {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-}
-
-/* 身份和观战信息 */
-.identity-section {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-}
-
-.identity-section .label {
-  color: var(--muted);
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-.spectator-count {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: #f1f5f9;
-  border-radius: var(--radius-sm);
-}
-
-.spectator-count .label {
-  color: var(--muted);
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.spectator-count .value {
-  color: #1e293b;
-  font-weight: 700;
-  font-size: 0.95rem;
-}
-
-/* 玩家卡片 */
-.players-section {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 0;
-  flex-wrap: nowrap;
-  border-bottom: 2px solid #e2e8f0;
-  margin: 4px 0;
-}
-
-.player-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  padding: 12px;
-  background: #f9fafb;
-  border: 2px solid #e2e8f0;
-  border-radius: var(--radius-md);
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.player-card.active {
-  background: linear-gradient(135deg, #f0f7ff 0%, #eef2ff 100%);
-  border-color: var(--accent);
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
-  transform: scale(1.05);
-}
-
-.player-symbol {
-  font-size: 1.8rem;
-  font-weight: 900;
-  color: #1e293b;
-  line-height: 1;
-}
-
-.player-card.active .player-symbol {
-  font-size: 2rem;
-}
-
-.player-name {
-  font-size: 0.85rem;
-  color: var(--muted);
-  text-align: center;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.player-card.active .player-name {
-  color: var(--accent);
-  font-weight: 700;
-}
-
-.vs-divider {
-  color: #cbd5e1;
-  font-weight: 900;
-  font-size: 1.2rem;
-  margin: 0 4px;
-}
-
-/* 状态信息 */
-.status-section {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  padding: 12px 0;
-  border-bottom: 2px solid #e2e8f0;
-  margin: 4px 0;
-}
-
-.status-item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-  background: #f9fafb;
-  border-radius: var(--radius-md);
-  text-align: center;
-}
-
-.status-item .label {
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.turn-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  font-size: 1.4rem;
-  font-weight: 900;
-  color: white;
-  margin: 0 auto;
-}
-
-.turn-badge.turn-x {
-  background: linear-gradient(135deg, var(--x-color) 0%, #dc2626 100%);
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
-}
-
-.turn-badge.turn-o {
-  background: linear-gradient(135deg, var(--o-color) 0%, #0284c7 100%);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-}
-
-.board-badge {
-  display: inline-block;
-  padding: 6px 10px;
-  background: linear-gradient(135deg, #f0f4f8, #f9fafb);
-  border: 1px solid #cbd5e1;
-  border-radius: var(--radius-sm);
-  font-weight: 700;
-  font-size: 0.9rem;
-  color: #1e293b;
-}
-
-/* 帮助文本 */
-.helper-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 12px 0;
-}
-
-.helper-text {
-  padding: 12px;
-  background: #f9fafb;
-  border-radius: var(--radius-md);
-  border-left: 3px solid #cbd5e1;
-  color: var(--muted);
-  font-size: 0.9rem;
-  line-height: 1.5;
-  transition: all 0.2s;
-}
-
-.helper-text.canMove {
-  border-left-color: var(--success);
-  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%);
-  color: #065f46;
-  font-weight: 600;
-  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.1);
-}
-
-.action-buttons {
-  display: flex;
-  gap: 8px;
-}
-
-.action-buttons button {
-  flex: 1;
-  padding: 9px 12px;
-  font-size: 0.9rem;
-}
-
-.action-buttons button.small {
-  padding: 8px 12px;
-  font-size: 0.85rem;
-}
-
-/* 加入请求 */
-.requests {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: flex-start;
-  border-bottom: none;
-  padding: 12px;
-  background: linear-gradient(135deg, #fef3c7 0%, #fef08a 100%);
-  border-radius: var(--radius-md);
-  margin: 0;
-  border: 1px solid #fde047;
-}
-
-.log-list {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column-reverse;
-  min-height: 0;
-}
-
-.log-item {
-  padding: 8px 10px;
-  border-bottom: 1px solid #f1f5f9;
-  font-size: 0.9rem;
-  color: #475569;
-  font-family: monospace;
-  flex-shrink: 0;
-}
-
-.log-item:hover {
-  background: #f8fafc;
-}
-
-.hint {
-  color: var(--muted);
-  padding: 16px;
-  text-align: center;
-  background: #f9fafb;
-  border-radius: var(--radius-lg);
-  border: 1px dashed #cbd5e1;
-}
-
-.board-wrapper {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  width: 100%;
-  max-width: 800px;
-  margin: 0 auto;
-}
-
-.winner-overlay {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
-  z-index: 50;
-  animation: fadeIn 0.2s ease;
-}
-
-/* PC 端优化（1920x1080） */
-@media (min-width: 1400px) {
-  .app {
-    padding: 12px;
-    gap: 12px;
-  }
-
-  header {
-    padding: 12px 0;
-  }
-
-  main {
-    gap: 8px;
-    padding: 0;
-  }
-
-  .controls {
-    flex-shrink: 0;
-  }
-
-  .control-panel {
-    padding: 10px;
-    gap: 8px;
-  }
-
-  .control-row {
-    gap: 8px;
-  }
-
-  .control-row.buttons-row {
-    gap: 6px;
-  }
-
-  .control-row.buttons-row button,
-  .control-row.buttons-row > div {
-    min-width: 70px;
-  }
-
-  .input-group {
-    gap: 6px;
-  }
-
-  .input-group input,
-  .input-group select {
-    padding: 7px 9px;
-    font-size: 0.85rem;
-  }
-
-  .ai-toggle {
-    padding: 7px 10px;
-    font-size: 0.85rem;
-  }
-
-  .ai-icon {
-    font-size: 0.95rem;
-  }
-
-  .checkbox-group {
-    font-size: 0.85rem;
-  }
-
-  .status-group {
-    gap: 10px;
-  }
-
-  .status,
-  .client-id {
-    font-size: 0.8rem;
-  }
-
-  .lobby-section {
-    max-height: 200px;
-  }
-
-  .lobby-in-game {
-    max-height: 75vh;
-  }
-
-  .game-area {
-    gap: 12px;
-  }
-
-  .top-row {
-    flex-wrap: nowrap;
-    max-width: 1400px;
-  }
-
-  .top-row .meta-card {
-    width: 360px;
-    max-width: 360px;
-    max-height: 85vh;
-  }
-
-  .top-row .log {
-    width: auto;
-    flex: 1;
-    min-width: 300px;
-    max-height: 85vh;
-  }
-
-  .board-wrapper {
-    max-width: 700px;
-  }
-
-  .log {
-    padding: 10px;
-  }
-
-  .log-header {
-    margin-bottom: 10px;
-    padding-bottom: 10px;
-  }
-
-  .log-header h4 {
-    font-size: 0.9rem;
-  }
-
-  .log-item {
-    font-size: 0.8rem;
-    padding: 6px 8px;
-  }
-
-  .meta-row {
-    padding: 10px 0;
-    font-size: 0.9rem;
-  }
-
-  .player-card {
-    padding: 10px;
-  }
-
-  .player-symbol {
-    font-size: 1.6rem;
-  }
-
-  .player-card.active .player-symbol {
-    font-size: 1.8rem;
-  }
-
-  .player-name {
-    font-size: 0.8rem;
-  }
-
-  .log-header h4 {
-    font-size: 0.95rem;
-  }
-
-  .log-item {
-    font-size: 0.85rem;
-    padding: 6px 8px;
-  }
-
-  footer {
-    font-size: 0.85rem;
-    padding-top: 8px;
-    margin-top: auto;
-  }
-}
-
-/* 平板和小屏幕 */
-@media (max-width: 1399px) {
-  .app {
-    padding: 10px;
-    gap: 10px;
-  }
-
-  header {
-    padding: 10px 0;
-  }
-
-  main {
-    gap: 6px;
-    padding: 0;
-  }
-
-  .controls {
-    flex-shrink: 0;
-  }
-
-  .control-panel {
-    padding: 8px;
-    gap: 6px;
-  }
-
-  .control-row {
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-
-  .input-group {
-    gap: 6px;
-  }
-
-  .input-group input,
-  .input-group select {
-    padding: 7px 9px;
-    font-size: 0.85rem;
-  }
-
-  .ai-toggle {
-    padding: 7px 10px;
-    font-size: 0.85rem;
-  }
-
-  .lobby-section {
-    max-height: 180px;
-  }
-
-  .lobby-in-game {
-    max-height: 50vh;
-    min-width: 250px;
-  }
-
-  .game-area {
-    gap: 10px;
-  }
-
-  .top-row {
-    flex-direction: column;
-    max-height: 50vh;
-  }
-
-  .board-wrapper {
-    max-width: 600px;
-  }
-
-  .top-row .meta-card {
-    width: 100%;
-    max-width: 100%;
-    max-height: 25vh;
-  }
-
-  .top-row .log {
-    width: 100%;
-    max-width: 100%;
-    max-height: 25vh;
-  }
-
-  .meta-row {
-    padding: 8px 0;
-  }
-
-  .players-section {
-    padding: 10px 0;
-  }
-
-  .player-card {
-    padding: 8px;
-  }
-
-  .player-symbol {
-    font-size: 1.4rem;
-  }
-
-  .player-name {
-    font-size: 0.75rem;
-  }
-}
-
-/* 移动端优化 */
-@media (max-width: 768px) {
-  .app {
-    padding: 8px;
-    gap: 6px;
-  }
-
-  header h1 {
-    font-size: 1.4rem;
-  }
-
-  main {
-    gap: 4px;
-  }
-
-  .controls {
-    flex-shrink: 0;
-  }
-
-  .control-panel {
-    padding: 8px;
-    gap: 6px;
-  }
-
-  .control-row {
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-
-  .control-row.buttons-row {
-    gap: 4px;
-  }
-
-  .control-row.buttons-row button {
-    flex: 1 1 auto;
-    min-width: 60px;
-    padding: 7px 8px;
-    font-size: 0.8rem;
-  }
-
-  .input-group {
-    gap: 6px;
-    flex: 1 1 auto;
-    min-width: 100%;
-  }
-
-  .input-group input,
-  .input-group select {
-    width: auto;
-    flex: 1 1 auto;
-    padding: 7px 8px;
-    font-size: 0.85rem;
-  }
-
-  .ai-toggle {
-    padding: 7px 8px;
-    font-size: 0.8rem;
-    flex: 0 1 auto;
-  }
-
-  .ai-icon {
-    font-size: 0.9rem;
-  }
-
-  .status-group {
-    gap: 8px;
-    width: 100%;
-    margin-top: 4px;
-  }
-
-  .status,
-  .client-id {
-    font-size: 0.75rem;
-    flex: 1 1 auto;
-  }
-
-  .lobby-section {
-    max-height: 140px;
-  }
-
-  .lobby-in-game {
-    max-height: 35vh;
-    min-width: 100%;
-  }
-
-  .game-area {
-    gap: 8px;
-  }
-
-  .top-row {
-    flex-direction: column;
-    gap: 8px;
-    max-height: none;
-    flex-wrap: nowrap;
-  }
-
-  .board-wrapper {
-    max-width: 100%;
-  }
-
-  .top-row .lobby-in-game {
-    order: 1;
-  }
-
-  .top-row .meta-card {
-    width: 100%;
-    max-width: 100%;
-    max-height: none;
-    padding: 10px;
-    gap: 8px;
-    order: 2;
-  }
-
-  .top-row .log {
-    width: 100%;
-    max-width: 100%;
-    max-height: 300px;
-    padding: 10px;
-    order: 3;
-  }
-
-  .meta-card {
-    padding: 10px;
-  }
-
-  .meta-row {
-    padding: 6px 0;
-    gap: 8px;
-    font-size: 0.9rem;
-  }
-
-  .room-badge {
-    padding: 8px;
-    gap: 6px;
-  }
-
-  .room-badge .value {
-    font-size: 0.85rem;
-  }
-
-  .copy-btn {
-    padding: 6px 10px;
-    font-size: 0.8rem;
-  }
-
-  .players-section {
-    padding: 8px 0;
-    gap: 6px;
-  }
-
-  .player-card {
-    padding: 8px;
-    gap: 4px;
-  }
-
-  .player-symbol {
-    font-size: 1.2rem;
-  }
-
-  .player-card.active .player-symbol {
-    font-size: 1.4rem;
-  }
-
-  .player-name {
-    font-size: 0.75rem;
-  }
-
-  .status-section {
-    gap: 8px;
-  }
-
-  .status-item {
-    padding: 8px;
-  }
-
-  .turn-badge {
-    width: 36px;
-    height: 36px;
-    font-size: 1.2rem;
-  }
-
-  .log-header {
-    margin-bottom: 8px;
-    padding-bottom: 8px;
-  }
-
-  .log-header h4 {
-    font-size: 0.9rem;
-  }
-
-  .log-header small {
-    font-size: 0.8rem;
-  }
-
-  .log-item {
-    font-size: 0.8rem;
-    padding: 5px 8px;
-  }
-
-  footer {
-    font-size: 0.8rem;
-    padding: 8px 0;
-    margin-top: auto;
-  }
-
-  .winner-card {
-    padding: 24px;
-  }
-
-  .winner-symbol {
-    font-size: 60px;
-  }
-
-  .helper-text {
-    font-size: 0.85rem;
-    padding: 8px;
-    margin: 4px 0;
-  }
-
-  .error {
-    font-size: 0.9rem;
-    padding: 8px 10px;
-  }
-}
-
-/* 小手机屏幕 */
-@media (max-width: 480px) {
-  .app {
-    padding: 6px;
-  }
-
-  header h1 {
-    font-size: 1.2rem;
-  }
-
-  .controls {
-    padding: 6px;
-    gap: 4px;
-  }
-
-  .controls input,
-  .controls select,
-  .controls button {
-    padding: 7px 8px;
-    font-size: 0.85rem;
-  }
-
-  .top-row .meta-card {
-    max-height: 20vh;
-    padding: 8px;
-  }
-
-  .top-row .log {
-    max-height: 20vh;
-    padding: 8px;
-  }
-
-  .meta-row {
-    padding: 4px 0;
-    font-size: 0.85rem;
-  }
-
-  .room-badge {
-    padding: 6px 8px;
-  }
-
-  .room-badge .label {
-    font-size: 0.75rem;
-  }
-
-  .room-badge .value {
-    font-size: 0.8rem;
-  }
-
-  .copy-btn {
-    padding: 5px 8px;
-    font-size: 0.75rem;
-  }
-
-  .player-badge {
-    min-width: 80px;
-    padding: 6px 8px;
-  }
-
-  .player-card {
-    padding: 6px;
-  }
-
-  .player-symbol {
-    font-size: 1rem;
-  }
-
-  .status-item {
-    padding: 6px;
-  }
-
-  .turn-badge {
-    width: 32px;
-    height: 32px;
-    font-size: 1rem;
-  }
-
-  .log-item {
-    font-size: 0.75rem;
-    padding: 4px 6px;
-  }
-}
+.app { font-family: inherit }
+.game-area { display:flex; gap:20px; flex-wrap:wrap; justify-content:flex-start; align-items:flex-start; width:100% }
+.top-row{display:flex;gap:20px;align-items:flex-start;justify-content:flex-start;width:100%;flex-wrap:wrap}
+.top-row .meta-card{flex:1;min-width:260px;max-width:340px}
+.top-row .log{flex:1;min-width:260px;max-width:400px}
+@media (max-width:1024px){
+  .game-area{justify-content:center}
+  .top-row{justify-content:center}
+  .top-row .meta-card,.top-row .log{max-width:100%}
+}
+.log{background:#fff;padding:16px;border-radius:var(--radius-lg);box-shadow:var(--shadow-md);display:flex;flex-direction:column}
+.log-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid #e2e8f0}
+.log-header h4{margin:0;color:#1e293b;font-size:1rem;font-weight:600}
+.log-header small{color:var(--muted);font-size:0.85rem}
+.log-list{flex:1;max-height:420px;overflow-y:auto;display:flex;flex-direction:column-reverse}
+.log-item{padding:8px 10px;border-bottom:1px solid #f1f5f9;font-size:0.9rem;color:#475569;font-family:monospace}
+.log-item:hover{background:#f8fafc}
+.hint{color:var(--muted);padding:16px;text-align:center;background:#f9fafb;border-radius:var(--radius-lg);border:1px dashed #cbd5e1}
+
+.badge{font-size:0.95rem;letter-spacing:0.5px}
+.winner-overlay{
+  position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);z-index:50;animation:fadeIn 0.2s ease
+}
+@keyframes fadeIn{from{opacity:0;backdrop-filter:blur(0)}to{opacity:1;backdrop-filter:blur(4px)}}
+.winner-card{
+  background:#fff;padding:32px;border-radius:var(--radius-lg);display:flex;flex-direction:column;align-items:center;gap:16px;
+  box-shadow:var(--shadow-lg);animation:slideUp 0.3s cubic-bezier(0.34,1.56,0.64,1)
+}
+@keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+.winner-text{font-size:1rem;color:var(--muted);font-weight:600;letter-spacing:1px}
+.winner-symbol{font-size:80px;font-weight:900;line-height:1}
+.winner-card button{margin-top:8px}
+
+.meta-card{
+  background:linear-gradient(135deg,#fff 0%,#f8fafc 100%);padding:16px;border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-md);display:flex;flex-direction:column;gap:12px;border:1px solid #e2e8f0
+}
+.meta-row{
+  display:flex;align-items:center;gap:12px;font-size:0.95rem;padding:8px 0;
+  border-bottom:1px solid #e2e8f0;flex-wrap:wrap
+}
+.meta-row:last-child{border-bottom:none}
+.meta-row strong{color:#1e293b;font-weight:600}
+.meta-row.meta-header{justify-content:space-between;align-items:center;border-bottom:none;padding-bottom:8px}
+.room-id{font-weight:600;color:#1e293b}
+.copy-btn{padding:6px 10px;font-size:0.85rem}
+.role{color:#1e293b;font-weight:600}
+.player-label{display:inline-block;padding:4px 8px;background:#eef2ff;color:var(--accent);border-radius:var(--radius-sm);font-weight:600;font-size:0.9rem}
+.spectators{color:var(--muted)}
+.players{justify-content:flex-start;gap:16px;padding:12px 0;flex-wrap:wrap}
+.player-badge{
+  display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 14px;background:#f9fafb;border-radius:var(--radius-md);
+  border:1px solid #e2e8f0;min-width:100px;transition:all 0.2s
+}
+.player-badge.active{background:linear-gradient(135deg,#eef2ff 0%,#f0f4f8 100%);border-color:var(--accent);box-shadow:0 0 12px rgba(37,99,235,0.1)}
+.player-badge .sym{font-size:1.5rem;font-weight:900;color:#1e293b}
+.player-badge .name{font-size:0.85rem;color:var(--muted);text-align:center;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vs{color:#cbd5e1;font-weight:700;font-size:1.2rem}
+.turn{font-weight:600;color:#1e293b}
+.next-board{color:var(--muted)}
+.helper-text{
+  padding:12px;background:#f9fafb;border-radius:var(--radius-md);border-left:3px solid #cbd5e1;color:var(--muted);font-size:0.9rem;
+  margin:8px 0;width:100%;box-sizing:border-box
+}
+.helper-text.canMove{
+  border-left-color:var(--success);background:#ecfdf5;color:#065f46;font-weight:500
+}
+.status-row{justify-content:space-between;flex-wrap:wrap}
+.requests{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;border-bottom:none;padding:12px;background:#fef3c7;border-radius:var(--radius-md);margin:0}
+.requests .muted{margin-right:0}
 </style>
